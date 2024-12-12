@@ -1,35 +1,38 @@
-import os
 import pandas as pd
-import seaborn as sns
+import numpy as np
+import os
 import matplotlib.pyplot as plt
-import openai
-import requests
-from sklearn.linear_model import LinearRegression
+from chardet import detect
 
-# Set up the OpenAI API token (replace with your actual token)
-AIPROXY_TOKEN = os.environ.get("AIPROXY_TOKEN")
-if AIPROXY_TOKEN is None:
-    raise ValueError("AIPROXY_TOKEN environment variable not set.")
+def detect_encoding(filename):
+    try:
+        encoding = detect(open(filename, 'rb').read())['encoding']
+        if encoding in ['ascii', 'utf-8']:
+            return encoding
+        return 'latin1'  # fallback to latin1 for mixed encodings
+    except Exception as e:
+        print(f"Error detecting encoding: {e}")
+        return 'utf-8'  # default to utf-8 in case of error
 
-# Set the proxy URL for OpenAI API
-openai.api_base = "https://aiproxy.sanand.workers.dev/openai"
-openai.api_key = AIPROXY_TOKEN
 
 def analyze_data(filename):
-    """Loads and analyzes the given CSV dataset.
-    
+    """
+    Loads and analyzes the given CSV dataset.
+
     Args:
         filename (str): Path to the CSV file.
-        
+
     Returns:
-        tuple: A tuple containing summary statistics, missing values,
-               correlation matrix, outliers, and trends.
+        tuple: A tuple containing summary statistics, missing values, correlation matrix, outliers, and trends.
     """
     try:
-        df = pd.read_csv(filename, encoding='utf-8')
-    except UnicodeDecodeError:
-        print(f"UTF-8 decoding failed for {filename}. Trying with 'latin1' encoding.")
-        df = pd.read_csv(filename, encoding='latin1')
+        # Detect encoding
+        encoding = detect_encoding(filename)
+        # Read file with detected encoding
+        df = pd.read_csv(filename, encoding=encoding)
+    except UnicodeDecodeError as e:
+        print(f"UnicodeDecodeError: {e}. Failed to decode {filename}.")
+        return None, None, None, None, None
     except FileNotFoundError:
         print(f"File not found: {filename}")
         return None, None, None, None, None
@@ -37,167 +40,124 @@ def analyze_data(filename):
         print(f"Error reading {filename}: {e}")
         return None, None, None, None, None
 
+    # Select numeric columns only
     numeric_df = df.select_dtypes(include='number')
     
     # Summary statistics
-    summary_stats = numeric_df.describe().to_string()
+    summary_stats = numeric_df.describe().to_string() if not numeric_df.empty else "No numeric data found."
     
     # Missing values
     missing_values = df.isnull().sum().to_string()
-    
+
     # Correlation matrix
     correlation_matrix = numeric_df.corr() if not numeric_df.empty else None
-    
+
     # Detecting outliers using IQR (Interquartile Range)
     outliers = detect_outliers(numeric_df)
-    
+
     # Analyzing trends using linear regression
     trends = analyze_trends(df)
-    
+
     return summary_stats, missing_values, correlation_matrix, outliers, trends
 
-def detect_outliers(numeric_df):
-    """Detects outliers in the numeric dataframe using IQR (Interquartile Range).
-    
-    Args:
-        numeric_df (pd.DataFrame): DataFrame containing numeric columns.
-        
-    Returns:
-        pd.Series: Outliers in each column.
+def detect_outliers(df):
     """
-    Q1 = numeric_df.quantile(0.25)
-    Q3 = numeric_df.quantile(0.75)
-    IQR = Q3 - Q1
-    outliers = ((numeric_df < (Q1 - 1.5 * IQR)) | (numeric_df > (Q3 + 1.5 * IQR))).sum()
-    return outliers
+    Detects outliers in the numeric columns of a DataFrame using the IQR method.
+
+    Args:
+        df (DataFrame): DataFrame with numeric data.
+
+    Returns:
+        str: Outliers summary.
+    """
+    if df.empty:
+        return "No numeric data for outlier detection."
+    outlier_summary = ""
+    for column in df.columns:
+        q1 = df[column].quantile(0.25)
+        q3 = df[column].quantile(0.75)
+        iqr = q3 - q1
+        lower_bound = q1 - 1.5 * iqr
+        upper_bound = q3 + 1.5 * iqr
+        outliers = df[(df[column] < lower_bound) | (df[column] > upper_bound)]
+        outlier_summary += f"Column '{column}': {len(outliers)} outliers detected.\n"
+    return outlier_summary
 
 def analyze_trends(df):
-    """Analyzes trends in numeric data using linear regression.
-    
-    Args:
-        df (pd.DataFrame): DataFrame containing the dataset.
-        
-    Returns:
-        dict: A dictionary with column names as keys and regression coefficients as values.
     """
+    Placeholder for analyzing trends. Custom logic can be added as required.
+
+    Args:
+        df (DataFrame): The DataFrame to analyze.
+
+    Returns:
+        str: Trends summary.
+    """
+    # Placeholder for actual trend analysis
+    return "Trend analysis not implemented."
+
+def save_visualizations(df, dataset_name):
+    """
+    Creates and saves visualizations for a dataset.
+
+    Args:
+        df (DataFrame): DataFrame of the dataset.
+        dataset_name (str): Name of the dataset.
+    """
+    if df.empty:
+        print(f"No data to visualize for {dataset_name}.")
+        return
+
+    # Select numeric columns only for plotting
     numeric_df = df.select_dtypes(include='number')
-    trend_results = {}
-    
-    if 'Time' in numeric_df.columns:
-        X = numeric_df[['Time']]
-        for column in numeric_df.columns:
-            if column != 'Time':
-                y = numeric_df[column]
-                model = LinearRegression()
-                model.fit(X, y)
-                trend_results[column] = model.coef_[0]  # Coefficient of the regression line
-    
-    return trend_results
+    if numeric_df.empty:
+        print(f"No numeric data to visualize in {dataset_name}.")
+        return
 
-def create_story(summary_stats, missing_values, correlation_matrix, outliers, trends, dataset_description):
-    """Uses LLM to create a narrative about the analysis.
-    
-    Args:
-        summary_stats (str): Summary statistics string.
-        missing_values (str): Missing values string.
-        correlation_matrix (pd.DataFrame): The correlation matrix.
-        outliers (pd.Series): Outliers in the data.
-        trends (dict): The trends in the data.
-        dataset_description (str): Brief description of the dataset.
-        
-    Returns:
-        str: The narrative story created by LLM.
-    """
-    correlation_matrix_markdown = correlation_matrix.to_markdown() if correlation_matrix is not None else "No correlation matrix available."
-    
-    prompt = f"""
-Dataset Description: {dataset_description}
-**Summary Statistics:** {summary_stats}
-**Missing Values:** {missing_values}
-**Correlation Matrix:** {correlation_matrix_markdown}
-**Outliers:** {outliers}
-**Trends (Regression Coefficients):** {trends}
-
-Based on this data, create a summary with the following structure:
-1. A brief description of the dataset.
-2. Explanation of the analysis and key insights.
-3. Any surprising or important findings.
-4. Suggestions for real-world actions or implications.
-"""
-    
-    headers = {
-        "Authorization": f"Bearer {AIPROXY_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    
-    data = {
-        "model": "gpt-4o-mini",
-        "messages": [{"role": "user", "content": prompt}]
-    }
-    
+    # Generate pairplot for correlation
     try:
-        response = requests.post(
-            "https://aiproxy.sanand.workers.dev/openai/v1/chat/completions",
-            headers=headers,
-            json=data
-        )
-        response.raise_for_status()
-        return response.json()['choices'][0]['message']['content']
-        
-    except requests.exceptions.RequestException as e:
-        print(f"Error communicating with OpenAI API: {e}")
-        return "Error: Failed to create story using LLM."
+        plt.figure(figsize=(10, 8))
+        corr = numeric_df.corr()
+        plt.matshow(corr, cmap='coolwarm', fignum=1)
+        plt.colorbar()
+        plt.title(f"Correlation Matrix for {dataset_name}", pad=15)
+        plt.savefig(f"{dataset_name}_correlation_matrix.png")
+        plt.close()
+        print(f"Correlation matrix visualization saved for {dataset_name}.")
+    except Exception as e:
+        print(f"Error generating correlation matrix visualization for {dataset_name}: {e}")
 
-def create_folder(dataset_name):
-    """Creates a folder for each dataset to store analysis files.
-    
-    Args:
-        dataset_name (str): Name of the dataset for folder creation.
-        
+def main(dataset_files):
     """
-    if not os.path.exists(dataset_name):
-        os.makedirs(dataset_name)
+    Main function to analyze and visualize multiple datasets.
 
-def main(dataset_filenames):
-    """Main function to run the analysis and create narratives for multiple datasets.
-    
     Args:
-        dataset_filenames (list): List of paths to CSV files.
-        
+        dataset_files (list): List of dataset file paths.
     """
-    
-    for dataset_filename in dataset_filenames:
-        dataset_name = dataset_filename.split('.')[0]
+    for dataset_filename in dataset_files:
+        dataset_name = os.path.splitext(os.path.basename(dataset_filename))[0]
         print(f"Analyzing {dataset_filename}...")
-        
-        # Create folder for each dataset
-        create_folder(dataset_name)
-        
-        summary_stats, missing_values, correlation_matrix, outliers, trends = analyze_data(dataset_filename)
-        
-        # Brief description of the dataset (customize as needed)
-        dataset_description = f"This dataset contains data about {dataset_name}."
-        
-        # Generate the story
-        story = create_story(summary_stats, missing_values, correlation_matrix, outliers, trends, dataset_description)
 
-        # Save the story to README.md
-        with open(f'{dataset_name}/README.md', 'w') as f:
-            f.write("# Automated Data Analysis\n")
-            f.write(f"## Analysis of {dataset_filename}\n")
-            f.write(f"### Summary Statistics\n{summary_stats}\n")
-            f.write(f"### Missing Values\n{missing_values}\n")
-            f.write(f"### Correlation Matrix\n{correlation_matrix_markdown}\n")
-            f.write(f"### Outliers\n{outliers}\n")
-            f.write(f"### Trend Analysis\n{trends}\n")
-            f.write(f"### Analysis Story\n{story}\n")
+        try:
+            summary_stats, missing_values, correlation_matrix, outliers, trends = analyze_data(dataset_filename)
+            if summary_stats:
+                print(f"Summary Statistics for {dataset_name}:\n{summary_stats}")
+            if missing_values:
+                print(f"Missing Values for {dataset_name}:\n{missing_values}")
+            if correlation_matrix is not None:
+                print(f"Correlation Matrix for {dataset_name}:\n{correlation_matrix}")
+            if outliers:
+                print(f"Outliers for {dataset_name}:\n{outliers}")
+            if trends:
+                print(f"Trends for {dataset_name}:\n{trends}")
 
-            # Save any generated plots here as well if applicable
-            
-            print(f"Analysis for {dataset_filename} complete.\n")
+            # Save visualizations
+            df = pd.read_csv(dataset_filename, encoding=detect_encoding(dataset_filename))
+            save_visualizations(df, dataset_name)
+
+        except Exception as e:
+            print(f"An error occurred while analyzing {dataset_filename}: {e}")
 
 if __name__ == "__main__":
-    # List of datasets to process (modify this list as needed)
-    dataset_files = ['goodreads.csv', 'happiness.csv', 'media.csv']
-    
+    dataset_files = ["goodreads.csv", "happiness.csv", "media.csv"]  # Update with actual file paths
     main(dataset_files)

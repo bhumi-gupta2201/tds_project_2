@@ -1,163 +1,91 @@
-import pandas as pd
-import numpy as np
+
 import os
+import sys
+import pandas as pd
+import seaborn as sns
+import matplotlib
+matplotlib.use("Agg")  # Use a non-interactive backend
 import matplotlib.pyplot as plt
-from chardet import detect
+import httpx
+import chardet
 
-def detect_encoding(filename):
-    try:
-        encoding = detect(open(filename, 'rb').read())['encoding']
-        if encoding in ['ascii', 'utf-8']:
-            return encoding
-        return 'latin1'  # fallback to latin1 for mixed encodings
-    except Exception as e:
-        print(f"Error detecting encoding: {e}")
-        return 'utf-8'  # default to utf-8 in case of error
+# Constants
+API_URL = "https://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
+AIPROXY_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6IjIxZjMwMDAzMjhAZHMuc3R1ZHkuaWl0bS5hYy5pbiJ9.sdErABQZRIrLR5TaqR1lBDMgCsP2myC7MtqsanZbvQk"
 
+def load_data(file_path):
+    """Load CSV data with encoding detection."""
+    with open(file_path, 'rb') as f:
+        result = chardet.detect(f.read())
+    encoding = result['encoding']
+    return pd.read_csv(file_path, encoding=encoding)
 
-def analyze_data(filename):
-    """
-    Loads and analyzes the given CSV dataset.
+def analyze_data(df):
+    """Perform basic data analysis."""
+    numeric_df = df.select_dtypes(include=['number'])  # Select only numeric columns
+    analysis = {
+        'summary': df.describe(include='all').to_dict(),
+        'missing_values': df.isnull().sum().to_dict(),
+        'correlation': numeric_df.corr().to_dict()  # Compute correlation only on numeric columns
+    }
+    return analysis
 
-    Args:
-        filename (str): Path to the CSV file.
-
-    Returns:
-        tuple: A tuple containing summary statistics, missing values, correlation matrix, outliers, and trends.
-    """
-    try:
-        # Detect encoding
-        encoding = detect_encoding(filename)
-        # Read file with detected encoding
-        df = pd.read_csv(filename, encoding=encoding)
-    except UnicodeDecodeError as e:
-        print(f"UnicodeDecodeError: {e}. Failed to decode {filename}.")
-        return None, None, None, None, None
-    except FileNotFoundError:
-        print(f"File not found: {filename}")
-        return None, None, None, None, None
-    except Exception as e:
-        print(f"Error reading {filename}: {e}")
-        return None, None, None, None, None
-
-    # Select numeric columns only
-    numeric_df = df.select_dtypes(include='number')
-    
-    # Summary statistics
-    summary_stats = numeric_df.describe().to_string() if not numeric_df.empty else "No numeric data found."
-    
-    # Missing values
-    missing_values = df.isnull().sum().to_string()
-
-    # Correlation matrix
-    correlation_matrix = numeric_df.corr() if not numeric_df.empty else None
-
-    # Detecting outliers using IQR (Interquartile Range)
-    outliers = detect_outliers(numeric_df)
-
-    # Analyzing trends using linear regression
-    trends = analyze_trends(df)
-
-    return summary_stats, missing_values, correlation_matrix, outliers, trends
-
-def detect_outliers(df):
-    """
-    Detects outliers in the numeric columns of a DataFrame using the IQR method.
-
-    Args:
-        df (DataFrame): DataFrame with numeric data.
-
-    Returns:
-        str: Outliers summary.
-    """
-    if df.empty:
-        return "No numeric data for outlier detection."
-    outlier_summary = ""
-    for column in df.columns:
-        q1 = df[column].quantile(0.25)
-        q3 = df[column].quantile(0.75)
-        iqr = q3 - q1
-        lower_bound = q1 - 1.5 * iqr
-        upper_bound = q3 + 1.5 * iqr
-        outliers = df[(df[column] < lower_bound) | (df[column] > upper_bound)]
-        outlier_summary += f"Column '{column}': {len(outliers)} outliers detected.\n"
-    return outlier_summary
-
-def analyze_trends(df):
-    """
-    Placeholder for analyzing trends. Custom logic can be added as required.
-
-    Args:
-        df (DataFrame): The DataFrame to analyze.
-
-    Returns:
-        str: Trends summary.
-    """
-    # Placeholder for actual trend analysis
-    return "Trend analysis not implemented."
-
-def save_visualizations(df, dataset_name):
-    """
-    Creates and saves visualizations for a dataset.
-
-    Args:
-        df (DataFrame): DataFrame of the dataset.
-        dataset_name (str): Name of the dataset.
-    """
-    if df.empty:
-        print(f"No data to visualize for {dataset_name}.")
-        return
-
-    # Select numeric columns only for plotting
-    numeric_df = df.select_dtypes(include='number')
-    if numeric_df.empty:
-        print(f"No numeric data to visualize in {dataset_name}.")
-        return
-
-    # Generate pairplot for correlation
-    try:
-        plt.figure(figsize=(10, 8))
-        corr = numeric_df.corr()
-        plt.matshow(corr, cmap='coolwarm', fignum=1)
-        plt.colorbar()
-        plt.title(f"Correlation Matrix for {dataset_name}", pad=15)
-        plt.savefig(f"{dataset_name}_correlation_matrix.png")
+def visualize_data(df, file_name):
+    """Generate and save visualizations."""
+    sns.set(style="whitegrid")
+    numeric_columns = df.select_dtypes(include=['number']).columns
+    for column in numeric_columns:
+        plt.figure()
+        sns.histplot(df[column].dropna(), kde=True)
+        plt.title(f'Distribution of {column}')
+        plt.savefig(f'{file_name}_{column}_distribution.png')
         plt.close()
-        print(f"Correlation matrix visualization saved for {dataset_name}.")
+
+def generate_narrative(analysis):
+    """Generate narrative using LLM."""
+    headers = {
+        'Authorization': f'Bearer {AIPROXY_TOKEN}',
+        'Content-Type': 'application/json'
+    }
+    prompt = f"Provide a detailed analysis based on the following data summary: {analysis}"
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": prompt}]
+    }
+    try:
+        response = httpx.post(API_URL, headers=headers, json=data, timeout=30.0)
+        response.raise_for_status()
+        return response.json()['choices'][0]['message']['content']
+    except httpx.HTTPStatusError as e:
+        print(f"HTTP error occurred: {e}")
+    except httpx.RequestError as e:
+        print(f"Request error occurred: {e}")
     except Exception as e:
-        print(f"Error generating correlation matrix visualization for {dataset_name}: {e}")
+        print(f"An unexpected error occurred: {e}")
+    return "Narrative generation failed due to an error."
 
-def main(dataset_files):
-    """
-    Main function to analyze and visualize multiple datasets.
+def process_file(file_path):
+    """Process a single CSV file."""
+    df = load_data(file_path)
+    analysis = analyze_data(df)
+    visualize_data(df, os.path.splitext(os.path.basename(file_path))[0])  # Save with the base filename
+    narrative = generate_narrative(analysis)
+    report_filename = f'{os.path.splitext(os.path.basename(file_path))[0]}_README.md'
+    with open(report_filename, 'w') as f:
+        f.write(narrative)
 
-    Args:
-        dataset_files (list): List of dataset file paths.
-    """
-    for dataset_filename in dataset_files:
-        dataset_name = os.path.splitext(os.path.basename(dataset_filename))[0]
-        print(f"Analyzing {dataset_filename}...")
-
-        try:
-            summary_stats, missing_values, correlation_matrix, outliers, trends = analyze_data(dataset_filename)
-            if summary_stats:
-                print(f"Summary Statistics for {dataset_name}:\n{summary_stats}")
-            if missing_values:
-                print(f"Missing Values for {dataset_name}:\n{missing_values}")
-            if correlation_matrix is not None:
-                print(f"Correlation Matrix for {dataset_name}:\n{correlation_matrix}")
-            if outliers:
-                print(f"Outliers for {dataset_name}:\n{outliers}")
-            if trends:
-                print(f"Trends for {dataset_name}:\n{trends}")
-
-            # Save visualizations
-            df = pd.read_csv(dataset_filename, encoding=detect_encoding(dataset_filename))
-            save_visualizations(df, dataset_name)
-
-        except Exception as e:
-            print(f"An error occurred while analyzing {dataset_filename}: {e}")
+def main():
+    # List of CSV files to process
+    csv_files = ["goodreads.csv", "happiness.csv", "media.csv"]
+    
+    # Process each file
+    for csv_file in csv_files:
+        print(f"Processing {csv_file}...")
+        if os.path.exists(csv_file):
+            process_file(csv_file)
+            print(f"Finished processing {csv_file}. Results saved.")
+        else:
+            print(f"File {csv_file} not found. Skipping.")
 
 if __name__ == "__main__":
-    dataset_files = ["goodreads.csv", "happiness.csv", "media.csv"]  # Update with actual file paths
-    main(dataset_files)
+    main()

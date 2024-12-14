@@ -1,6 +1,5 @@
 import os
 import pandas as pd
-import seaborn as sns
 import matplotlib.pyplot as plt
 import openai
 import requests
@@ -99,22 +98,18 @@ def perform_hypothesis_testing(df, column_pairs):
 
 # ========== 3. Visualization ==========
 def visualize_data(df, dataset_name):
-    """Generates visualizations for the dataset with titles, axis labels, and legends."""
-    
-    # Pairplot for all numerical features
-    sns.pairplot(df.select_dtypes(include='number'))
-    plt.title(f"Pairplot of {dataset_name}")
-    plt.savefig(f'{dataset_name}/pairplot.png')
+    """Generates visualizations for the dataset using matplotlib."""
     
     # Histograms for each numerical feature
     for column in df.select_dtypes(include='number').columns:
         plt.figure()
-        sns.histplot(df[column], kde=True, bins=30, color='skyblue')
+        plt.hist(df[column], bins=30, color='skyblue', alpha=0.7)
         plt.title(f"Distribution of {column}")
         plt.xlabel(column)
         plt.ylabel("Frequency")
-        plt.legend([f"Distribution of {column}"])
+        plt.grid(axis='y', alpha=0.75)
         plt.savefig(f'{dataset_name}/{column}_distribution.png')
+        plt.close()  # Close the figure to avoid display issues
 
 # ========== 4. Narrative ==========
 def create_story(summary_stats, missing_values, correlation_matrix, outliers, trends, hypothesis_results, anomalies, dataset_description):

@@ -1,17 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = [
-#   "httpx",
-#   "pandas",
-#   "numpy",
-#   "matplotlib",
-#   "seaborn",
-#   "chardet",
-#   "scikit-learn",
-#   "tabulate",
-# ]
-# ///
-
 import sys
 import os
 import httpx
@@ -25,21 +11,20 @@ import pandas as pd
 import seaborn as sns
 import chardet
 import matplotlib.pyplot as plt
-import chardet
 from dateutil import parser
 import subprocess
 import json
 
 
 # Environment variable for AI Proxy token
-AIPROXY_TOKEN = os.environ["AIPROXY_TOKEN"]
+AIPROXY_TOKEN = os.environ.get("AIPROXY_TOKEN")
 if not AIPROXY_TOKEN:
     raise EnvironmentError("AIPROXY_TOKEN is not set. Please set it before running the script.")
 
 # Function definitions
 def detect_encoding(file_path):
     """
-Detect the encoding of a CSV file.
+    Detect the encoding of a CSV file.
     """
     with open(file_path, 'rb') as file:
         result = chardet.detect(file.read())
@@ -93,7 +78,7 @@ def is_date_column(column):
 
     # Check the column's content for date-like patterns (e.g., strings with numbers)
     sample_values = column.dropna().head(10)  # Check the first 10 non-NaN values
-    date_patterns = [r"\d{2}-[A-Za-z]{3}-\d{2}",r"\d{2}-[A-Za-z]{3}-\d{4}", r"\d{4}-\d{2}-\d{2}", r"\d{2}/\d{2}/\d{4}"]
+    date_patterns = [r"\d{2}-[A-Za-z]{3}-\d{2}", r"\d{2}-[A-Za-z]{3}-\d{4}", r"\d{4}-\d{2}-\d{2}", r"\d{2}/\d{2}/\d{4}"]
 
     for value in sample_values:
         if isinstance(value, str):
@@ -182,7 +167,7 @@ def clustering_analysis(df):
         return numeric_data['Cluster'], numeric_data.index
     except Exception as e:
         print(f"Error while Clustering: {e}")
-        return None,None
+        return None, None
 
 def summarize_correlation(df):
     """Summarize key insights from the correlation matrix."""
@@ -269,132 +254,95 @@ def visualize_advanced(df, output_folder):
     numeric_data = df.select_dtypes(include=[np.number]).dropna()
     if not numeric_data.empty:
         plt.figure(figsize=(10, 8))
-        sns.heatmap(numeric_data.corr(), annot=True, cmap="coolwarm")
-        file_path = os.path.join(output_folder, "correlation_heatmap.png")
-        plt.savefig(file_path)
-        visualizations.append(file_path)
+        sns.heatmap(numeric_data.corr(), annot=True, cmap="coolwarm", fmt=".2f", linewidths=0.5)
+        heatmap_path = os.path.join(output_folder, "correlation_heatmap.png")
+        plt.savefig(heatmap_path)
+        visualizations.append(heatmap_path)
         plt.close()
 
     # Pairplot
-    try:
-        sns.pairplot(df.select_dtypes(include=[np.number]).dropna())
-        file_path = os.path.join(output_folder, "pairplot.png")
-        plt.savefig(file_path)
-        visualizations.append(file_path)
-    except Exception as e:
-        print(f"Error creating pairplot: {e}")
+    pairplot_path = os.path.join(output_folder, "pairplot.png")
+    sns.pairplot(numeric_data)
+    plt.savefig(pairplot_path)
+    visualizations.append(pairplot_path)
+    plt.close()
 
-    # Clustering Scatter Plot
-    clusters, valid_indices = clustering_analysis(df)
-    summary = generate_summary(df,clusters)
-    if clusters is not None and len(valid_indices) > 1:
-        df_with_clusters = numeric_data.loc[valid_indices].copy()
-        df_with_clusters["Cluster"] = clusters.values
-        plt.figure(figsize=(10, 8))
-        for cluster in np.unique(clusters):
-            subset = df_with_clusters[df_with_clusters["Cluster"] == cluster]
-            # Ensure that the values are numeric and handle NaNs or infinite values
-            subset.iloc[:, 0] = pd.to_numeric(subset.iloc[:, 0], errors='coerce')
-            subset.iloc[:, 1] = pd.to_numeric(subset.iloc[:, 1], errors='coerce')
+    # Clustering visualization
+    if 'Cluster' in df.columns:
+        sns.scatterplot(data=df, x=numeric_data.columns[0], y=numeric_data.columns[1], hue='Cluster', palette='viridis')
+        clustering_plot_path = os.path.join(output_folder, "clustering_plot.png")
+        plt.savefig(clustering_plot_path)
+        visualizations.append(clustering_plot_path)
+        plt.close()
 
-            subset = subset.dropna(subset=[subset.columns[0], subset.columns[1]])
-            subset = subset[~subset.isin([np.inf, -np.inf]).any(axis=1)]
-
-        # Now plot the data
-            plt.scatter(subset.iloc[:, 0].astype(float), subset.iloc[:, 1].astype(float), label=f"Cluster {cluster}")
-        plt.legend()
-        file_path = os.path.join(output_folder, "clustering_scatter.png")
-        plt.savefig(file_path)
-        visualizations.append(file_path)
-
+    # Summary of generated visualizations
+    summary = f"Generated {len(visualizations)} visualizations:\n" + "\n".join(visualizations)
     return visualizations, summary
 
-def query_llm(prompt):
+
+def create_story(analysis, summary):
     """
-Queries the LLM for insights and returns the response.
+    Create a story-like narrative that summarizes the findings.
     """
-    try:
-        url = "https://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {AIPROXY_TOKEN}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": "gpt-4o-mini",  # Supported chat model
-            "messages": [
-                {"role": "system", "content": "You are a helpful data analysis assistant. Provide insights, suggestions, and implications based on the given analysis and visualizations."},
-                {"role": "user", "content": prompt},
-            ],
-        }
-        payload_json = json.dumps(payload)
-        curl_command = [
-            "curl",
-            "-X", "POST", url,
-            "-H", f"Authorization: Bearer {AIPROXY_TOKEN}",
-            "-H", "Content-Type: application/json",
-            "-d", payload_json
-        ]
-        result = subprocess.run(curl_command, capture_output=True, text=True)
-        if result.returncode == 0:
-            response_data = json.loads(result.stdout)
-            return response_data["choices"][0]["message"]["content"]
-        else:
-            raise Exception(f"Error in curl request: {result.stderr}")
-    except Exception as e:
-        print(f"Error querying AI Proxy: {e}")
-        return "Error: Unable to generate narrative."
-
-def create_story(analysis, visualizations_summary):
-    """
-Creates a narrative using LLM based on analysis and visualizations.
-    """
-    prompt = (
-        f"### Data Summary:\nShape: {analysis['shape']}\n"
-        f"Columns: {', '.join(list(analysis['columns'].keys()))}\n"
-        f"Missing Values: {str(analysis['missing_values'])}\n\n"
-        f"### Key Summary Statistics:\nTop 3 Columns:\n{pd.DataFrame(analysis['summary_statistics']).iloc[:, :3].to_string()}\n\n"
-        f"### Visualizations:\nCorrelation heatmap, Pairplot, Clustering Scatter Plot.\n\n"
-        "Based on the above, provide a detailed narrative including insights and potential actions."
-    )
-
-    return query_llm(prompt)
+    story = f"### Data Analysis Report\n\n"
+    story += f"#### Shape of the Data: {analysis['shape']}\n"
+    story += f"#### Summary Statistics: {json.dumps(analysis['summary_statistics'], indent=2)}\n"
+    story += f"#### Missing Values: {json.dumps(analysis['missing_values'], indent=2)}\n"
+    story += f"#### Outliers detected: {analysis.get('outliers', 'None')}\n\n"
+    story += f"#### Data Correlation Summary:\n{summary['correlation']}\n\n"
+    story += f"#### Pairplot Insights:\n{summary['pairplot']}\n\n"
+    story += f"#### Clustering Summary:\n{summary['clustering']}\n"
+    return story
 
 
-def save_results(analysis, visualizations, story, output_folder):
-    readme_path = os.path.join(output_folder, "README.md")
-    with open(readme_path, "w") as f:
-        f.write("# Automated Data Analysis Report\n\n")
-        f.write("## Data Overview\n")
-        f.write(f"**Shape**: {analysis['shape']}\n\n")
-        f.write("## Summary Statistics\n")
-        f.write(pd.DataFrame(analysis["summary_statistics"]).to_markdown())
-        f.write("## Narrative\n")
-        f.write(str(story))  # if story is a list of strings
-
-def main():
-    print("Starting script...")
-    if len(sys.argv) != 2:
-        print("Incorrect arguments. Usage: uv run autolysis.py dataset.csv")
-        sys.exit(1)
-
-
-    file_path = sys.argv[1]
-    print(f"Reading file: {file_path}")
-    dataset_name = os.path.splitext(os.path.basename(file_path))[0]
-    output_folder = dataset_name
+def save_results(analysis, visualizations, summary, output_folder):
+    """Save analysis results, visualizations, and the generated story to files."""
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
-    print(f"Output folder created: {output_folder}")
+
+    # Save analysis results
+    with open(os.path.join(output_folder, 'analysis_results.json'), 'w') as f:
+        json.dump(analysis, f)
+
+    # Save visualizations paths
+    with open(os.path.join(output_folder, 'visualizations.json'), 'w') as f:
+        json.dump(visualizations, f)
+
+    # Save the narrative story
+    with open(os.path.join(output_folder, 'analysis_story.txt'), 'w') as f:
+        f.write(summary)
+
+
+def main():
+    """
+    Main function that orchestrates the script execution.
+    """
+    if len(sys.argv) != 2:
+        print("Usage: python script.py <csv_file_path>")
+        sys.exit(1)
+
+    file_path = sys.argv[1]
+
+    print(f"Processing file: {file_path}")
+
+    # Read the CSV file
     df = read_csv(file_path)
-    print("Dataframe loaded.")
+
+    # Perform advanced analysis
     analysis = perform_advanced_analysis(df)
-    print("Analysis complete.")
+
+    # Visualize the data
+    output_folder = "analysis_results"
+    os.makedirs(output_folder, exist_ok=True)
     visualizations, summary = visualize_advanced(df, output_folder)
-    print(f"Generated visualizations: {visualizations}")
+
+    # Generate narrative
     story = create_story(analysis, summary)
-    print("Story created.")
-    save_results(analysis,visualizations,story, output_folder)
-    print("Results saved.")
+
+    # Save the results
+    save_results(analysis, visualizations, story, output_folder)
+
+    print("Analysis complete. Results saved to 'analysis_results' folder.")
 
 if __name__ == "__main__":
     main()

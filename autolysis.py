@@ -83,7 +83,7 @@ def detect_anomalies(df):
         model = IsolationForest(n_estimators=100, contamination=0.05, random_state=42)
         numeric_df['anomaly'] = model.fit_predict(numeric_df)
         return numeric_df[numeric_df['anomaly'] == -1]
-    
+        
     return pd.DataFrame()  # Return empty DataFrame if no numerical data
 
 def perform_hypothesis_testing(df, column_pairs):
@@ -115,7 +115,7 @@ def visualize_data(df, dataset_name):
         plt.ylabel("Frequency")
         plt.legend([f"Distribution of {column}"])
         plt.savefig(f'{dataset_name}/{column}_distribution.png')
-        
+
 # ========== 4. Narrative ==========
 def create_story(summary_stats, missing_values, correlation_matrix, outliers, trends, hypothesis_results, anomalies, dataset_description):
     """Creates a context-rich narrative summary for the analysis."""
@@ -124,17 +124,16 @@ def create_story(summary_stats, missing_values, correlation_matrix, outliers, tr
     
     anomaly_str = anomalies.to_string() if not anomalies.empty else "No anomalies detected."
     
-    prompt = f""" 
-Dataset Description: {dataset_description} 
-**Summary Statistics:** {summary_stats} 
-**Missing Values:** {missing_values} 
-**Correlation Matrix:** {correlation_matrix_md} 
-**Outliers:** {outliers} 
-**Trends (Regression Coefficients):** {trends} 
-**Hypothesis Test Results:** {hypothesis_results} 
-**Anomalies Detected:** {anomaly_str} 
-
-Create a structured narrative summary of this data analysis with the following: 
+    prompt = f"""
+Dataset Description: {dataset_description}
+**Summary Statistics:** {summary_stats}
+**Missing Values:** {missing_values}
+**Correlation Matrix:** {correlation_matrix_md}
+**Outliers:** {outliers}
+**Trends (Regression Coefficients):** {trends}
+**Hypothesis Test Results:** {hypothesis_results}
+**Anomalies Detected:** {anomaly_str}
+Create a structured narrative summary of this data analysis with the following:
 1. Briefly describe the dataset.
 2. Explain the data analysis and key insights.
 3. Highlight surprising or significant findings.
@@ -143,26 +142,31 @@ Create a structured narrative summary of this data analysis with the following:
 6. Integrate visualizations at relevant points and emphasize significant findings.
 """
     
-    headers = {"Authorization": f"Bearer {AIPROXY_TOKEN}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {AIPROXY_TOKEN}",
+        "Content-Type": "application/json"
+    }
     
-    data = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": prompt}]}
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": prompt}]
+    }
     
     try:
         response = requests.post("https://aiproxy.sanand.workers.dev/openai/v1/chat/completions", headers=headers, json=data)
         response.raise_for_status()
+        
         return response.json()['choices'][0]['message']['content']
-    
+        
     except requests.exceptions.RequestException as e:
         print(f"Error communicating with OpenAI API: {e}")
-    
-    return "Error: Unable to generate story."
+        return "Error: Unable to generate story."
 
 # ========== 5. Efficient LLM Usage ==========
 def efficient_llm_usage(data):
     """Minimize token usage by sending concise prompts to LLM."""
     
     # Here we only send relevant insights and summaries instead of large datasets.
-    
     summary = data['summary_stats']
     
     insights = f"Key insights from the analysis: {summary}"
@@ -178,19 +182,16 @@ def generate_dynamic_prompt(data):
     return prompt
 
 def dynamic_function_call(data, function_type="analysis"):
-    """Dynamically call the appropriate function based on the data type."""
-    
-    if function_type == "analysis":
-        return analyze_trends(data)
-    
-    elif function_type == "visualization":
-        visualize_data(data, "dynamic_dataset")  # Visualization doesn't need a return value
-    
-    elif function_type == "narrative":
-        return create_story(data['summary_stats'], data['missing_values'], data['correlation_matrix'], data['outliers'], data['trends'], data['hypothesis_results'], data['anomalies'], "Sample Dataset")
-    
-    else:
-        return "Invalid function type."
+   """Dynamically call the appropriate function based on the data type."""
+   
+   if function_type == "analysis":
+       return analyze_trends(data)
+   elif function_type == "visualization":
+       visualize_data(data, "dynamic_dataset")  # Visualization doesn't need a return value
+   elif function_type == "narrative":
+       return create_story(data['summary_stats'], data['missing_values'], data['correlation_matrix'], data['outliers'], data['trends'], data['hypothesis_results'], data['anomalies'], "Sample Dataset")
+   else:
+       return "Invalid function type."
 
 # ========== 7. Vision Agentic (Vision + Multiple LLM Calls) ==========
 def vision_agentic_workflow(df, dataset_name):
@@ -222,7 +223,6 @@ def vision_agentic_workflow(df, dataset_name):
    }
    
    prompt = generate_dynamic_prompt(analysis_data)  # Generate dynamic prompt
-   
    insights = efficient_llm_usage(analysis_data)  # Generate concise insights
    
    # Call LLM for final narrative
@@ -241,30 +241,32 @@ def vision_agentic_workflow(df, dataset_name):
 
 # ========== 8. Main Execution ==========
 def analyze_dataset(dataset_filename):
-     """Performs end-to-end analysis for a single dataset."""
-     
-     dataset_name = dataset_filename.split('.')[0]
-     print(f"Analyzing {dataset_filename}...")
-     create_folder(dataset_name)
-     df = load_data(dataset_filename)
-     
-     if df is None:
-         return
+   """Performs end-to-end analysis for a single dataset."""
+   
+   dataset_name = dataset_filename.split('.')[0]
+   print(f"Analyzing {dataset_filename}...")
+   
+   create_folder(dataset_name)
+   
+   df = load_data(dataset_filename)
+   
+   if df is None:
+       return
+   
+   # Dynamic function calling based on data
+   dynamic_function_call(df, "analysis")
+   dynamic_function_call(df, "visualization")
+   dynamic_function_call(df, "narrative")
 
-     # Dynamic function calling based on data
-     dynamic_function_call(df, "analysis")
-     dynamic_function_call(df, "visualization")
-     dynamic_function_call(df, "narrative")
+   # Vision Agentic Workflow
+   insights, narrative = vision_agentic_workflow(df, dataset_name)
 
-     # Vision Agentic Workflow
-     insights, narrative = vision_agentic_workflow(df, dataset_name)
-
-     print(f"Insights: {insights}")
-     print(f"Narrative: {narrative}")
-     
-     print(f"Analysis for {dataset_filename} complete.\n")
+   print(f"Insights: {insights}")
+   print(f"Narrative: {narrative}")
+   print(f"Analysis for {dataset_filename} complete.\n")
 
 if __name__ == "__main__":
-     dataset_files = ['goodreads.csv', 'happiness.csv', 'media.csv']
-     for dataset in dataset_files:
-         analyze_dataset(dataset)
+   dataset_files = ['goodreads.csv', 'happiness.csv', 'media.csv']
+   
+   for dataset in dataset_files:
+       analyze_dataset(dataset)

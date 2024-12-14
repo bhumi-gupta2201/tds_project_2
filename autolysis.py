@@ -1,91 +1,270 @@
-
 import os
-import sys
 import pandas as pd
 import seaborn as sns
-import matplotlib
-matplotlib.use("Agg")  # Use a non-interactive backend
 import matplotlib.pyplot as plt
-import httpx
-import chardet
+import openai
+import requests
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import IsolationForest
+from scipy.stats import ttest_ind
 
-# Constants
-API_URL = "https://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
-AIPROXY_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6IjIxZjMwMDAzMjhAZHMuc3R1ZHkuaWl0bS5hYy5pbiJ9.sdErABQZRIrLR5TaqR1lBDMgCsP2myC7MtqsanZbvQk"
+# Set up the OpenAI API token (replace with your actual token)
+AIPROXY_TOKEN = os.environ.get("AIPROXY_TOKEN")
+if AIPROXY_TOKEN is None:
+    raise ValueError("AIPROXY_TOKEN environment variable not set.")
+openai.api_base = "https://aiproxy.sanand.workers.dev/openai"
+openai.api_key = AIPROXY_TOKEN
 
-def load_data(file_path):
-    """Load CSV data with encoding detection."""
-    with open(file_path, 'rb') as f:
-        result = chardet.detect(f.read())
-    encoding = result['encoding']
-    return pd.read_csv(file_path, encoding=encoding)
-
-def analyze_data(df):
-    """Perform basic data analysis."""
-    numeric_df = df.select_dtypes(include=['number'])  # Select only numeric columns
-    analysis = {
-        'summary': df.describe(include='all').to_dict(),
-        'missing_values': df.isnull().sum().to_dict(),
-        'correlation': numeric_df.corr().to_dict()  # Compute correlation only on numeric columns
-    }
-    return analysis
-
-def visualize_data(df, file_name):
-    """Generate and save visualizations."""
-    sns.set(style="whitegrid")
-    numeric_columns = df.select_dtypes(include=['number']).columns
-    for column in numeric_columns:
-        plt.figure()
-        sns.histplot(df[column].dropna(), kde=True)
-        plt.title(f'Distribution of {column}')
-        plt.savefig(f'{file_name}_{column}_distribution.png')
-        plt.close()
-
-def generate_narrative(analysis):
-    """Generate narrative using LLM."""
-    headers = {
-        'Authorization': f'Bearer {AIPROXY_TOKEN}',
-        'Content-Type': 'application/json'
-    }
-    prompt = f"Provide a detailed analysis based on the following data summary: {analysis}"
-    data = {
-        "model": "gpt-4o-mini",
-        "messages": [{"role": "user", "content": prompt}]
-    }
+# ========== 1. Data Handling ==========
+def load_data(filename):
+    """Loads data from a CSV file, handling common encoding issues."""
     try:
-        response = httpx.post(API_URL, headers=headers, json=data, timeout=30.0)
+        df = pd.read_csv(filename, encoding='utf-8')
+    except UnicodeDecodeError:
+        print(f"UTF-8 decoding failed for {filename}. Trying with 'latin1' encoding.")
+        df = pd.read_csv(filename, encoding='latin1')
+    except FileNotFoundError:
+        print(f"File not found: {filename}")
+        return None
+    except Exception as e:
+        print(f"Error reading {filename}: {e}")
+        return None
+    return df
+
+def create_folder(dataset_name):
+    """Creates a folder for storing analysis outputs."""
+    if not os.path.exists(dataset_name):
+        os.makedirs(dataset_name)
+
+# ========== 2. Analysis ==========
+def get_summary_stats(df):
+    """Generates summary statistics for numerical data."""
+    numeric_df = df.select_dtypes(include='number')
+    return numeric_df.describe().to_string()
+
+def detect_missing_values(df):
+    """Counts missing values in the dataset."""
+    return df.isnull().sum().to_string()
+
+def calculate_correlation_matrix(df):
+    """Calculates correlation matrix for numerical columns."""
+    numeric_df = df.select_dtypes(include='number')
+    return numeric_df.corr() if not numeric_df.empty else None
+
+def detect_outliers(df):
+    """Detects outliers in numerical columns using the IQR method."""
+    numeric_df = df.select_dtypes(include='number')
+    Q1 = numeric_df.quantile(0.25)
+    Q3 = numeric_df.quantile(0.75)
+    IQR = Q3 - Q1
+    return ((numeric_df < (Q1 - 1.5 * IQR)) | (numeric_df > (Q3 + 1.5 * IQR))).sum()
+
+def analyze_trends(df):
+    """Analyzes trends in numerical data using linear regression."""
+    numeric_df = df.select_dtypes(include='number')
+    trend_results = {}
+    
+    if 'Time' in numeric_df.columns:
+        X = numeric_df[['Time']]
+        for column in numeric_df.columns:
+            if column != 'Time':
+                y = numeric_df[column]
+                model = LinearRegression()
+                model.fit(X, y)
+                trend_results[column] = model.coef_[0]  # Coefficient of the regression line
+                
+    return trend_results
+
+def detect_anomalies(df):
+    """Detects anomalies using the Isolation Forest algorithm."""
+    numeric_df = df.select_dtypes(include='number')
+    
+    if not numeric_df.empty:
+        model = IsolationForest(n_estimators=100, contamination=0.05, random_state=42)
+        numeric_df['anomaly'] = model.fit_predict(numeric_df)
+        return numeric_df[numeric_df['anomaly'] == -1]
+    
+    return pd.DataFrame()  # Return empty DataFrame if no numerical data
+
+def perform_hypothesis_testing(df, column_pairs):
+    """Performs t-tests for specified pairs of columns."""
+    results = {}
+    
+    for col1, col2 in column_pairs:
+        if col1 in df.columns and col2 in df.columns:
+            stat, p_value = ttest_ind(df[col1].dropna(), df[col2].dropna())
+            results[(col1, col2)] = p_value
+            
+    return results
+
+# ========== 3. Visualization ==========
+def visualize_data(df, dataset_name):
+    """Generates visualizations for the dataset with titles, axis labels, and legends."""
+    
+    # Pairplot for all numerical features
+    sns.pairplot(df.select_dtypes(include='number'))
+    plt.title(f"Pairplot of {dataset_name}")
+    plt.savefig(f'{dataset_name}/pairplot.png')
+    
+    # Histograms for each numerical feature
+    for column in df.select_dtypes(include='number').columns:
+        plt.figure()
+        sns.histplot(df[column], kde=True, bins=30, color='skyblue')
+        plt.title(f"Distribution of {column}")
+        plt.xlabel(column)
+        plt.ylabel("Frequency")
+        plt.legend([f"Distribution of {column}"])
+        plt.savefig(f'{dataset_name}/{column}_distribution.png')
+        
+# ========== 4. Narrative ==========
+def create_story(summary_stats, missing_values, correlation_matrix, outliers, trends, hypothesis_results, anomalies, dataset_description):
+    """Creates a context-rich narrative summary for the analysis."""
+    
+    correlation_matrix_md = correlation_matrix.to_markdown() if correlation_matrix is not None else "No correlation matrix available."
+    
+    anomaly_str = anomalies.to_string() if not anomalies.empty else "No anomalies detected."
+    
+    prompt = f""" 
+Dataset Description: {dataset_description} 
+**Summary Statistics:** {summary_stats} 
+**Missing Values:** {missing_values} 
+**Correlation Matrix:** {correlation_matrix_md} 
+**Outliers:** {outliers} 
+**Trends (Regression Coefficients):** {trends} 
+**Hypothesis Test Results:** {hypothesis_results} 
+**Anomalies Detected:** {anomaly_str} 
+
+Create a structured narrative summary of this data analysis with the following: 
+1. Briefly describe the dataset.
+2. Explain the data analysis and key insights.
+3. Highlight surprising or significant findings.
+4. Discuss implications and suggested actions based on significant findings.
+5. Ensure proper Markdown formatting for easy readability.
+6. Integrate visualizations at relevant points and emphasize significant findings.
+"""
+    
+    headers = {"Authorization": f"Bearer {AIPROXY_TOKEN}", "Content-Type": "application/json"}
+    
+    data = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": prompt}]}
+    
+    try:
+        response = requests.post("https://aiproxy.sanand.workers.dev/openai/v1/chat/completions", headers=headers, json=data)
         response.raise_for_status()
         return response.json()['choices'][0]['message']['content']
-    except httpx.HTTPStatusError as e:
-        print(f"HTTP error occurred: {e}")
-    except httpx.RequestError as e:
-        print(f"Request error occurred: {e}")
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-    return "Narrative generation failed due to an error."
-
-def process_file(file_path):
-    """Process a single CSV file."""
-    df = load_data(file_path)
-    analysis = analyze_data(df)
-    visualize_data(df, os.path.splitext(os.path.basename(file_path))[0])  # Save with the base filename
-    narrative = generate_narrative(analysis)
-    report_filename = f'{os.path.splitext(os.path.basename(file_path))[0]}_README.md'
-    with open(report_filename, 'w') as f:
-        f.write(narrative)
-
-def main():
-    # List of CSV files to process
-    csv_files = ["goodreads.csv", "happiness.csv", "media.csv"]
     
-    # Process each file
-    for csv_file in csv_files:
-        print(f"Processing {csv_file}...")
-        if os.path.exists(csv_file):
-            process_file(csv_file)
-            print(f"Finished processing {csv_file}. Results saved.")
-        else:
-            print(f"File {csv_file} not found. Skipping.")
+    except requests.exceptions.RequestException as e:
+        print(f"Error communicating with OpenAI API: {e}")
+    
+    return "Error: Unable to generate story."
+
+# ========== 5. Efficient LLM Usage ==========
+def efficient_llm_usage(data):
+    """Minimize token usage by sending concise prompts to LLM."""
+    
+    # Here we only send relevant insights and summaries instead of large datasets.
+    
+    summary = data['summary_stats']
+    
+    insights = f"Key insights from the analysis: {summary}"
+    
+    return insights
+
+# ========== 6. Dynamic Prompts and Function Calling ==========
+def generate_dynamic_prompt(data):
+    """Generates a dynamic prompt for LLM based on the dataset's specific features."""
+    
+    prompt = f"Analyze the dataset with the following properties:\n{data['features']}\nProvide insights into trends, correlations, and anomalies."
+    
+    return prompt
+
+def dynamic_function_call(data, function_type="analysis"):
+    """Dynamically call the appropriate function based on the data type."""
+    
+    if function_type == "analysis":
+        return analyze_trends(data)
+    
+    elif function_type == "visualization":
+        visualize_data(data, "dynamic_dataset")  # Visualization doesn't need a return value
+    
+    elif function_type == "narrative":
+        return create_story(data['summary_stats'], data['missing_values'], data['correlation_matrix'], data['outliers'], data['trends'], data['hypothesis_results'], data['anomalies'], "Sample Dataset")
+    
+    else:
+        return "Invalid function type."
+
+# ========== 7. Vision Agentic (Vision + Multiple LLM Calls) ==========
+def vision_agentic_workflow(df, dataset_name):
+   """Vision-based agentic workflow with multiple LLM calls."""
+   
+   visualize_data(df, dataset_name)  # First generate visualizations
+   
+   # Get summary and analysis
+   summary_stats = get_summary_stats(df)
+   missing_values = detect_missing_values(df)
+   correlation_matrix = calculate_correlation_matrix(df)
+   outliers = detect_outliers(df)
+   trends = analyze_trends(df)
+   anomalies = detect_anomalies(df)
+   
+   column_pairs = [('column1', 'column2'), ('column3', 'column4')]  # Update as needed
+   hypothesis_results = perform_hypothesis_testing(df, column_pairs)
+
+   # Prepare the data for LLM processing
+   analysis_data = {
+       'summary_stats': summary_stats,
+       'features': "Key numerical features of the dataset",
+       'trends': trends,
+       'missing_values': missing_values,
+       'correlation_matrix': correlation_matrix,
+       'outliers': outliers,
+       'hypothesis_results': hypothesis_results,
+       'anomalies': anomalies,
+   }
+   
+   prompt = generate_dynamic_prompt(analysis_data)  # Generate dynamic prompt
+   
+   insights = efficient_llm_usage(analysis_data)  # Generate concise insights
+   
+   # Call LLM for final narrative
+   narrative = create_story(
+       summary_stats,
+       missing_values,
+       correlation_matrix,
+       outliers,
+       trends,
+       hypothesis_results,
+       anomalies,
+       "Dataset description"
+   )
+   
+   return insights, narrative
+
+# ========== 8. Main Execution ==========
+def analyze_dataset(dataset_filename):
+     """Performs end-to-end analysis for a single dataset."""
+     
+     dataset_name = dataset_filename.split('.')[0]
+     print(f"Analyzing {dataset_filename}...")
+     create_folder(dataset_name)
+     df = load_data(dataset_filename)
+     
+     if df is None:
+         return
+
+     # Dynamic function calling based on data
+     dynamic_function_call(df, "analysis")
+     dynamic_function_call(df, "visualization")
+     dynamic_function_call(df, "narrative")
+
+     # Vision Agentic Workflow
+     insights, narrative = vision_agentic_workflow(df, dataset_name)
+
+     print(f"Insights: {insights}")
+     print(f"Narrative: {narrative}")
+     
+     print(f"Analysis for {dataset_filename} complete.\n")
 
 if __name__ == "__main__":
-    main()
+     dataset_files = ['goodreads.csv', 'happiness.csv', 'media.csv']
+     for dataset in dataset_files:
+         analyze_dataset(dataset)

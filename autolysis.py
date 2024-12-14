@@ -1,6 +1,6 @@
 import os
 import pandas as pd
-import seaborn 
+import seaborn as sns
 import matplotlib.pyplot as plt
 import openai
 import requests
@@ -102,14 +102,14 @@ def visualize_data(df, dataset_name):
     """Generates visualizations for the dataset with titles, axis labels, and legends."""
     
     # Pairplot for all numerical features
-    seaborn.pairplot(df.select_dtypes(include='number'))
+    sns.pairplot(df.select_dtypes(include='number'))
     plt.title(f"Pairplot of {dataset_name}")
     plt.savefig(f'{dataset_name}/pairplot.png')
     
     # Histograms for each numerical feature
     for column in df.select_dtypes(include='number').columns:
         plt.figure()
-        seaborn.histplot(df[column], kde=True, bins=30, color='skyblue')
+        sns.histplot(df[column], kde=True, bins=30, color='skyblue')
         plt.title(f"Distribution of {column}")
         plt.xlabel(column)
         plt.ylabel("Frequency")

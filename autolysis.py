@@ -2,8 +2,8 @@
 import os
 import pandas as pd
 import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
+import matplotlib.pyplot as plt
+import seaborn as sns
 from multiprocessing import Pool
 from functools import lru_cache
 import requests
@@ -65,26 +65,39 @@ def detect_column_outliers(args):
         return (column_name, outliers)
     return (column_name, 0)
 
-# Function to generate dynamic visualizations
-def visualize_data_dynamic(corr_matrix, outliers, df, output_dir):
-    print("Generating dynamic visualizations...")
+# Function to generate visualizations
+def visualize_data(corr_matrix, outliers, df, output_dir):
+    print("Generating visualizations...")
     
-    # Create interactive heatmap for correlation matrix
-    fig = px.imshow(corr_matrix, labels=dict(color="Correlation"))
-    fig.write_html(os.path.join(output_dir, 'correlation_matrix.html'))
+    # Create heatmap for correlation matrix
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt=".2f")
+    plt.title('Correlation Matrix')
+    plt.savefig(os.path.join(output_dir, 'correlation_matrix.png'))
+    plt.close()
     
-    # Create interactive bar chart for outliers
-    fig = px.bar(x=outliers.index, y=outliers.values, labels={'x': 'Columns', 'y': 'Number of Outliers'})
-    fig.write_html(os.path.join(output_dir, 'outliers.html'))
+    # Create bar chart for outliers
+    plt.figure(figsize=(12, 6))
+    outliers.plot(kind='bar')
+    plt.title('Outliers by Column')
+    plt.xlabel('Columns')
+    plt.ylabel('Number of Outliers')
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'outliers.png'))
+    plt.close()
     
-    # Create interactive distribution plot for the first numeric column
+    # Create distribution plot for the first numeric column
     numeric_columns = df.select_dtypes(include=[np.number]).columns
     if len(numeric_columns) > 0:
         first_numeric_column = numeric_columns[0]
-        fig = px.histogram(df, x=first_numeric_column, marginal="box")
-        fig.write_html(os.path.join(output_dir, f'distribution_{first_numeric_column}.html'))
+        plt.figure(figsize=(12, 6))
+        sns.histplot(df[first_numeric_column], kde=True)
+        plt.title(f'Distribution of {first_numeric_column}')
+        plt.savefig(os.path.join(output_dir, f'distribution_{first_numeric_column}.png'))
+        plt.close()
     
-    print("Dynamic visualizations generated.")
+    print("Visualizations generated.")
 
 # Function to create the README.md with a narrative and visualizations
 def create_readme(summary_stats, missing_values, corr_matrix, outliers, advanced_stats, output_dir):
@@ -116,13 +129,13 @@ def create_readme(summary_stats, missing_values, corr_matrix, outliers, advanced
             f.write("\n\n")
             
             f.write("## Correlation Matrix\n")
-            f.write("![Correlation Matrix](correlation_matrix.html)\n\n")
+            f.write("![Correlation Matrix](correlation_matrix.png)\n\n")
             
             f.write("## Outliers Visualization\n")
-            f.write("![Outliers](outliers.html)\n\n")
+            f.write("![Outliers](outliers.png)\n\n")
             
             f.write("## Distribution of Data\n")
-            f.write("![Distribution](distribution_.html)\n\n")
+            f.write("![Distribution](distribution_.png)\n\n")
             
             f.write("## Advanced Statistical Tests\n")
             for test, result in advanced_stats.items():
@@ -211,7 +224,7 @@ def main(csv_file):
     output_dir = "."
     os.makedirs(output_dir, exist_ok=True)
 
-    visualize_data_dynamic(corr_matrix, outliers, df, output_dir)
+    visualize_data(corr_matrix, outliers, df, output_dir)
 
     context = f"Dataset Analysis:\nSummary Statistics:\n{summary_stats}\n\nMissing Values:\n{missing_values}\n\nCorrelation Matrix:\n{corr_matrix}\n\nOutliers:\n{outliers}\n\nAdvanced Stats:\n{advanced_stats}"
     

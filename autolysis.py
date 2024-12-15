@@ -9,6 +9,7 @@
 #   "openai",
 #   "scikit-learn",
 #   "requests",
+#   "dask",
 #   "ipykernel",
 # ]
 # ///
@@ -22,6 +23,9 @@ import argparse
 import requests
 import json
 import openai
+from sklearn.ensemble import IsolationForest
+from sklearn.decomposition import PCA
+from dask import dataframe as dd
 
 def analyze_data(df):
     """
@@ -43,26 +47,28 @@ def analyze_data(df):
 
 def detect_outliers(df):
     """
-    Detect outliers in the dataset using the IQR method.
+    Detect outliers in the dataset using the Isolation Forest method.
 
     Args:
         df (pd.DataFrame): The input dataset.
 
     Returns:
-        pd.Series: A series containing the count of outliers per column.
+        pd.Series: A series containing the count of anomalies per column.
     """
     print("Detecting outliers...")
     df_numeric = df.select_dtypes(include=[np.number])
-    Q1 = df_numeric.quantile(0.25)
-    Q3 = df_numeric.quantile(0.75)
-    IQR = Q3 - Q1
-    outliers = ((df_numeric < (Q1 - 1.5 * IQR)) | (df_numeric > (Q3 + 1.5 * IQR))).sum()
+    if df_numeric.empty:
+        return pd.Series(dtype=int)
+
+    iso_forest = IsolationForest(random_state=42, contamination=0.05)
+    df_numeric['anomaly'] = iso_forest.fit_predict(df_numeric)
+    outliers = df_numeric['anomaly'].value_counts()
     print("Outliers detection complete.")
     return outliers
 
 def visualize_data(corr_matrix, outliers, df, output_dir):
     """
-    Generate visualizations: correlation heatmap, outlier bar plot, pair plot, missing value heatmap, and data distribution plot.
+    Generate visualizations: correlation heatmap, outlier bar plot, PCA plot, missing value heatmap, and data distribution plot.
 
     Args:
         corr_matrix (pd.DataFrame): Correlation matrix.
@@ -87,16 +93,19 @@ def visualize_data(corr_matrix, outliers, df, output_dir):
         files.append(heatmap_file)
         plt.close()
 
-    # Outliers Bar Plot
-    if not outliers.empty and outliers.sum() > 0:
-        outliers_file = os.path.join(output_dir, 'outliers.png')
-        plt.figure(figsize=(10, 6))
-        outliers.plot(kind='bar', color='red')
-        plt.title('Outliers Detection')
-        plt.xlabel('Columns')
-        plt.ylabel('Number of Outliers')
-        plt.savefig(outliers_file)
-        files.append(outliers_file)
+    # PCA Visualization
+    pca_file = os.path.join(output_dir, 'pca_plot.png')
+    numeric_columns = df.select_dtypes(include=[np.number]).columns
+    if len(numeric_columns) > 2:
+        pca = PCA(n_components=2)
+        pca_result = pca.fit_transform(df[numeric_columns].dropna())
+        plt.figure(figsize=(10, 8))
+        plt.scatter(pca_result[:, 0], pca_result[:, 1], alpha=0.6)
+        plt.title('PCA Plot')
+        plt.xlabel('Principal Component 1')
+        plt.ylabel('Principal Component 2')
+        plt.savefig(pca_file)
+        files.append(pca_file)
         plt.close()
 
     # Missing Value Heatmap
@@ -107,15 +116,6 @@ def visualize_data(corr_matrix, outliers, df, output_dir):
     plt.savefig(missing_file)
     files.append(missing_file)
     plt.close()
-
-    # Pair Plot
-    pairplot_file = os.path.join(output_dir, 'pairplot.png')
-    numeric_columns = df.select_dtypes(include=[np.number]).columns
-    if len(numeric_columns) > 1:
-        sns.pairplot(df[numeric_columns[:5]])  # Limit to first 5 numeric columns
-        plt.savefig(pairplot_file)
-        files.append(pairplot_file)
-        plt.close()
 
     print("Visualizations generated.")
     return files
@@ -200,7 +200,11 @@ def question_llm(prompt, context):
 def main(csv_file):
     print("Starting analysis...")
     try:
-        df = pd.read_csv(csv_file, encoding='ISO-8859-1')
+        # Leverage Dask for large datasets
+        if os.stat(csv_file).st_size > 1e7:  # If file size > 10MB
+            df = dd.read_csv(csv_file).compute()
+        else:
+            df = pd.read_csv(csv_file, encoding='ISO-8859-1')
     except Exception as e:
         print(f"Error loading CSV: {e}")
         return
